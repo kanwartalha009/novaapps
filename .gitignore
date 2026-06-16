@@ -1,0 +1,19 @@
+node_modules/
+dist/
+.next/
+.turbo/
+*.tsbuildinfo
+.env
+.env.local
+.env.*.local
+.env.secrets
+**/.env.secrets
+coverage/
+.DS_Store
+
+# Per-app Shopify app repos live here — each is its own git repo (e.g. shopify/encore -> kanwartalha009/encore)
+/shopify/
+
+# Per-tool standalone repos live here — each is its own git repo (Tool-class analogue of /shopify/).
+# nova-tool-template + reference tools (e.g. tools/outreach-composer) are seeds for those repos.
+/tools/

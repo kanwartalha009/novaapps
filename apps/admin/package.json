@@ -1,0 +1,34 @@
+{
+  "name": "admin",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 3001",
+    "build": "next build",
+    "start": "next start -p 3001",
+    "typecheck": "tsc --noEmit",
+    "lint": "echo 'lint: admin (todo)'"
+  },
+  "dependencies": {
+    "@nova/shared": "workspace:*",
+    "next": "^15.3.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "lucide-react": "^0.475.0",
+    "@radix-ui/react-dropdown-menu": "^2.1.6",
+    "@radix-ui/react-tooltip": "^1.1.8",
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^3.0.2",
+    "cmdk": "^1.1.1",
+    "sonner": "^2.0.1"
+  },
+  "devDependencies": {
+    "@nova/tsconfig": "workspace:*",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.7.0",
+    "tailwindcss": "^4.1.0",
+    "@tailwindcss/postcss": "^4.1.0"
+  }
+}

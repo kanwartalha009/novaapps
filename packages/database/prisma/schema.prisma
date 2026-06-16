@@ -1,0 +1,749 @@
+// Nova Apps Platform — schema v1 (Phase 0)
+// Intent documented in docs/01-architecture/domain-model.md.
+// Money tables (Charge, Commission, Payout) are append-only ledgers — invariant I-5.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Identity & access ──────────────────────────────────────────
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  roles          UserRole[]
+  memberships    AgencyMember[]
+  refreshTokens  RefreshToken[]
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  audience  String // 'admin' | 'agency'
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Role {
+  id          String  @id @default(cuid())
+  name        String  @unique
+  description String?
+  isSystem    Boolean @default(false) // SUPER_ADMIN etc., undeletable
+
+  permissions RolePermission[]
+  users       UserRole[]
+}
+
+model Permission {
+  id   String @id @default(cuid())
+  key  String @unique // e.g. 'payouts:release' — seeded from @nova/shared
+
+  roles RolePermission[]
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+}
+
+model UserRole {
+  userId String
+  roleId String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+}
+
+// ─── Tenancy ────────────────────────────────────────────────────
+
+enum AgencyStatus {
+  PENDING_APPROVAL
+  ACTIVE
+  SUSPENDED
+}
+
+model Agency {
+  id                String          @id @default(cuid())
+  name              String
+  slug              String          @unique // subdomain — immutable after approval (ADR-005)
+  status            AgencyStatus    @default(PENDING_APPROVAL)
+  commissionRateBps Int? // overrides platform default when set (PERCENT)
+  commissionModel   CommissionModel? // null = inherit platform default (ADR-012; PERCENT|FLAT)
+  flatAmount        Int? // minor units, used when commissionModel = FLAT
+  stripeCustomerId  String? // v2: payer identity for Tool billing (ADR-008)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  members         AgencyMember[]
+  stores          Store[]
+  installations   Installation[]
+  commissions     Commission[]
+  payouts         Payout[]
+  payoutMethods   PayoutMethod[]
+  appAssignments  AgencyApp[]
+  toolActivations ToolActivation[] // v2
+  subscriptions   Subscription[] // v2
+  invoices        Invoice[] // v2
+  entitlements    Entitlement[] // v2
+}
+
+/// Which apps an agency may distribute (C2 2026-06-10). Optional per-assignment
+/// commission override; resolution: AgencyApp.rateBps ?? Agency.commissionRateBps ?? default.
+model AgencyApp {
+  agencyId       String
+  appId          String
+  rateBps        Int? // override; null = inherit agency/platform rate (PERCENT)
+  commissionModel CommissionModel? // v2 (ADR-012): null = inherit agency/platform (PERCENT|FLAT)
+  flatAmount     Int? // minor units, used when commissionModel = FLAT
+  assignedAt     DateTime        @default(now())
+
+  agency Agency @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  app    App    @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  @@id([agencyId, appId])
+}
+
+enum AgencyMemberRole {
+  OWNER
+  MEMBER
+}
+
+model AgencyMember {
+  agencyId String
+  userId   String
+  role     AgencyMemberRole @default(MEMBER)
+  joinedAt DateTime         @default(now())
+
+  agency Agency @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([agencyId, userId])
+}
+
+// ─── Catalog ────────────────────────────────────────────────────
+
+enum AppStatus {
+  DRAFT
+  PUBLISHED
+  DELISTED
+}
+
+enum PricingModel {
+  FREE
+  FREEMIUM
+  PREMIUM
+}
+
+model App {
+  id                     String       @id @default(cuid())
+  name                   String
+  slug                   String       @unique
+  description            String?
+  iconUrl                String?
+  listingUrl             String? // Shopify App Store listing
+  status                 AppStatus    @default(DRAFT)
+  pricingModel           PricingModel @default(FREE)
+  shopifyApiKey          String? // encrypted at rest
+  shopifyApiSecretEnc    String? // encrypted at rest
+  shopifyWebhookSecretEnc String? // encrypted at rest
+  // Engine fields (C2, engine.md) — written by the engine; used from P2.
+  repoUrl                String?
+  shopifyClientId        String?
+  moduleManifest         Json?
+  latestVersion          String?
+  publishChecklist       Json?
+  spec                   Json? // blueprint (engine.md amendment 2026-06-11-e)
+  createdAt              DateTime     @default(now())
+  updatedAt              DateTime     @updatedAt
+
+  plans         AppPlan[]
+  installations Installation[]
+  agencyAssignments AgencyApp[]
+}
+
+enum PlanInterval {
+  EVERY_30_DAYS
+  ANNUAL
+}
+
+model AppPlan {
+  id            String       @id @default(cuid())
+  appId         String
+  name          String
+  amount        Int // minor units; 0 = free tier (monthly)
+  annualAmount  Int? // minor units; yearly price (20% off baked in). null → derive
+  preorderLimit Int? // monthly pre-order cap (Encore metering); null = unlimited
+  notifyLimit   Int? // monthly notify-me cap (Encore metering); null = unlimited
+  currency      String       @default("USD")
+  interval      PlanInterval @default(EVERY_30_DAYS)
+  trialDays     Int          @default(0)
+  shopifyHandle String?
+  isActive      Boolean      @default(true)
+
+  app           App            @relation(fields: [appId], references: [id], onDelete: Cascade)
+  installations Installation[]
+
+  @@unique([appId, name])
+}
+
+// ─── Distribution ───────────────────────────────────────────────
+
+model Store {
+  id             String   @id @default(cuid())
+  agencyId       String
+  shopDomain     String   @unique // e.g. acme.myshopify.com
+  name           String?
+  accessTokenEnc String? // OAuth offline token, encrypted, never returned by API (ADR-009)
+  grantedScopes  String[] // v2: Store Bridge scopes held for this store
+  tokenRotatedAt DateTime? // v2: last rotation (ADR-009, F9)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  agency            Agency                  @relation(fields: [agencyId], references: [id])
+  installations     Installation[]
+  bridgeConnections StoreBridgeConnection[] // v2
+
+  @@index([agencyId])
+}
+
+enum InstallationStatus {
+  PENDING
+  ACTIVE
+  UNINSTALLED
+}
+
+model Installation {
+  id            String             @id @default(cuid())
+  appId         String
+  storeId       String
+  agencyId      String // referral attribution — IMMUTABLE (invariant I-8)
+  appPlanId     String?
+  status        InstallationStatus @default(PENDING)
+  installedAt   DateTime?
+  uninstalledAt DateTime?
+
+  // Shopify subscription mirror — drives per-cycle charge recognition + stop-on-cancel.
+  // Source of truth is Shopify (Admin API at ACTIVE; Partner API for authoritative earnings).
+  subscriptionId     String? // gid://shopify/AppSubscription/… (stable across cycles)
+  subscriptionStatus String? // ACTIVE | CANCELLED | EXPIRED | FROZEN | DECLINED | PENDING
+  currentPeriodEnd   DateTime? // when the paid period ends; accrual rolls a new cycle past this
+  lastChargeAt       DateTime? // last cycle we recorded a Charge for (accrual cursor)
+
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  app     App      @relation(fields: [appId], references: [id])
+  store   Store    @relation(fields: [storeId], references: [id])
+  agency  Agency   @relation(fields: [agencyId], references: [id])
+  appPlan AppPlan? @relation(fields: [appPlanId], references: [id])
+  charges Charge[]
+
+  @@index([appId, storeId])
+  @@index([agencyId])
+}
+
+// ─── Money (append-only ledgers) ────────────────────────────────
+
+enum ChargeType {
+  SUBSCRIPTION
+  USAGE
+  ONE_TIME
+  REFUND
+}
+
+model Charge {
+  id             String     @id @default(cuid())
+  installationId String
+  externalId     String     @unique // Shopify charge/cycle id — idempotency
+  type           ChargeType
+  amount         Int // minor units; negative for REFUND
+  currency       String
+  shopifyFeeBps  Int? // snapshot for net-basis commissions (ADR-004)
+  occurredAt     DateTime
+  createdAt      DateTime   @default(now())
+
+  installation Installation @relation(fields: [installationId], references: [id])
+  commission   Commission?
+
+  @@index([installationId])
+}
+
+enum CommissionStatus {
+  PENDING
+  APPROVED
+  PAID
+  REVERSED
+}
+
+enum CommissionType {
+  EARNED
+  REVERSAL
+  ADJUSTMENT
+}
+
+model Commission {
+  id                   String           @id @default(cuid())
+  agencyId             String
+  chargeId             String?          @unique // null only for ADJUSTMENT
+  payoutId             String?
+  type                 CommissionType   @default(EARNED) // ledger entry kind: EARNED|REVERSAL|ADJUSTMENT
+  status               CommissionStatus @default(PENDING)
+  commissionModel      CommissionModel  @default(PERCENT) // v2 (ADR-012): rate model snapshot
+  basisAmount          Int // snapshot (audit)
+  rateBps              Int // snapshot (audit; used when model = PERCENT)
+  flatAmount           Int? // snapshot (audit; used when model = FLAT)
+  amount               Int // minor units; negative for REVERSAL
+  currency             String
+  reversesCommissionId String?          @unique
+  reason               String? // required for ADJUSTMENT
+  createdAt            DateTime         @default(now())
+
+  agency   Agency      @relation(fields: [agencyId], references: [id])
+  charge   Charge?     @relation(fields: [chargeId], references: [id])
+  payout   Payout?     @relation(fields: [payoutId], references: [id])
+  reverses Commission? @relation("Reversal", fields: [reversesCommissionId], references: [id])
+  reversedBy Commission? @relation("Reversal")
+
+  @@index([agencyId, status])
+}
+
+enum PayoutProviderKey {
+  MANUAL
+  STRIPE_CONNECT
+  PAYPAL
+}
+
+enum PayoutStatus {
+  DRAFT
+  PROCESSING
+  PAID
+  FAILED
+}
+
+model Payout {
+  id          String            @id @default(cuid())
+  agencyId    String
+  provider    PayoutProviderKey
+  providerRef String? // transfer id / manual reference
+  status      PayoutStatus      @default(DRAFT)
+  totalAmount Int
+  currency    String
+  releasedAt  DateTime?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  agency      Agency       @relation(fields: [agencyId], references: [id])
+  commissions Commission[]
+
+  @@index([agencyId, status])
+}
+
+model PayoutMethod {
+  id         String            @id @default(cuid())
+  agencyId   String
+  provider   PayoutProviderKey
+  isDefault  Boolean           @default(false)
+  detailsEnc String // encrypted: bank ref / stripe acct id / paypal email
+  createdAt  DateTime          @default(now())
+
+  agency Agency @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+
+  @@unique([agencyId, provider])
+}
+
+// ─── Ingress & settings ─────────────────────────────────────────
+
+enum WebhookEventStatus {
+  RECEIVED
+  PROCESSED
+  FAILED
+}
+
+model WebhookEvent {
+  id          String             @id @default(cuid())
+  externalId  String             @unique // X-Shopify-Webhook-Id / Stripe event id — idempotency
+  source      WebhookSource      @default(SHOPIFY_APP) // v2 (F6): SHOPIFY_APP | STRIPE | STORE_BRIDGE
+  productType ProductType? // v2: APP | TOOL (null for platform-level Stripe events)
+  productSlug String? // v2: app or tool slug (replaces appSlug)
+  topic       String
+  shopDomain  String? // optional — Stripe events have no shop
+  payload     Json
+  status      WebhookEventStatus @default(RECEIVED)
+  error       String?
+  createdAt   DateTime           @default(now())
+  processedAt DateTime?
+
+  @@index([source, topic])
+  @@index([productType, productSlug])
+}
+
+// ─── Support (C2 2026-06-10, spec: docs/03-modules/support.md) ──
+
+enum TicketStatus {
+  OPEN
+  WAITING_ON_MERCHANT
+  RESOLVED
+}
+
+enum TicketPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum TicketAuthor {
+  MERCHANT
+  BOT
+  SUPPORT
+  AGENCY
+}
+
+model Ticket {
+  id             String         @id @default(cuid())
+  appId          String // mandatory — all support is app-scoped
+  shopDomain     String
+  agencyId       String?
+  subject        String
+  status         TicketStatus   @default(OPEN)
+  priority       TicketPriority @default(NORMAL)
+  assigneeUserId String?
+  botHandled     Boolean        @default(false)
+  createdAt      DateTime       @default(now())
+  lastActivityAt DateTime       @default(now())
+
+  messages TicketMessage[]
+
+  @@index([appId, status])
+  @@index([agencyId])
+  @@index([lastActivityAt])
+}
+
+model TicketMessage {
+  id        String       @id @default(cuid())
+  ticketId  String
+  author    TicketAuthor
+  body      String
+  createdAt DateTime     @default(now())
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId])
+}
+
+model Setting {
+  key       String   @id // e.g. 'defaultCommissionRateBps', 'commissionBasis', 'minPayoutAmount'
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  v2 (2026-06-14) — Tools, inbound billing, Store Bridge, availability,
+//  entitlements. Intent: docs/01-architecture/domain-model.md + ADR-007..012.
+//  Invariants: I-11 (two classes), I-12 (entitlements authority),
+//  I-13 (Store Bridge only path), I-14 (App & Tool ledgers never mix).
+// ════════════════════════════════════════════════════════════════════
+
+// ─── Shared / commissions ───────────────────────────────────────────
+enum CommissionModel { // ADR-012 — distinct from CommissionType (ledger kind)
+  PERCENT
+  FLAT
+}
+
+enum ProductType {
+  APP
+  TOOL
+}
+
+enum WebhookSource {
+  SHOPIFY_APP
+  STRIPE
+  STORE_BRIDGE
+}
+
+// ─── Tool catalog ───────────────────────────────────────────────────
+enum ToolType {
+  AGENCY
+  STORE
+  HYBRID
+}
+
+model Tool {
+  id              String    @id @default(cuid())
+  name            String
+  slug            String    @unique
+  description     String?
+  iconUrl         String?
+  status          AppStatus @default(DRAFT) // reuse DRAFT|PUBLISHED|DELISTED
+  toolType        ToolType  @default(AGENCY)
+  usesStoreBridge Boolean   @default(false)
+  requiredScopes  String[] // Shopify Admin scopes the bridge must hold (ADR-009)
+  // engine fields (tool-engine)
+  repoUrl          String?
+  moduleManifest   Json?
+  latestVersion    String?
+  releaseChecklist Json?
+  spec             Json?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  plans             ToolPlan[]
+  meters            Meter[]
+  subscriptions     Subscription[]
+  invoices          Invoice[]
+  activations       ToolActivation[]
+  bridgeConnections StoreBridgeConnection[]
+  entitlements      Entitlement[]
+}
+
+model ToolPlan {
+  id             String       @id @default(cuid())
+  toolId         String
+  name           String
+  model          PricingModel @default(FREEMIUM) // FREE | FREEMIUM | PREMIUM (reused)
+  baseAmount     Int          @default(0) // minor units; 0 for FREE/FREEMIUM base
+  currency       String       @default("USD")
+  interval       PlanInterval @default(EVERY_30_DAYS)
+  trialDays      Int          @default(7) // ADR-008 default
+  perStore       Boolean      @default(false) // per-store add-on (requires Store Bridge)
+  perStoreAmount Int? // minor units per active bridge connection
+  meteredConfig  Json? // included qty + overage per meter key
+  stripePriceId  String?
+  isActive       Boolean      @default(true)
+
+  tool          Tool           @relation(fields: [toolId], references: [id], onDelete: Cascade)
+  subscriptions Subscription[]
+
+  @@unique([toolId, name])
+}
+
+model Meter {
+  id            String   @id @default(cuid())
+  toolId        String
+  key           String // e.g. 'api_calls', 'active_stores'
+  unitLabel     String?
+  stripeMeterId String?
+  createdAt     DateTime @default(now())
+
+  tool         Tool          @relation(fields: [toolId], references: [id], onDelete: Cascade)
+  usageRecords UsageRecord[]
+
+  @@unique([toolId, key])
+}
+
+// ─── Tool money (inbound from agency, Stripe; append-only — I-5, I-14) ──
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  INCOMPLETE
+}
+
+model Subscription {
+  id                   String             @id @default(cuid())
+  agencyId             String
+  toolId               String
+  toolPlanId           String
+  stripeSubscriptionId String?            @unique
+  status               SubscriptionStatus @default(TRIALING)
+  trialEndsAt          DateTime?
+  currentPeriodEnd     DateTime?
+  canceledAt           DateTime?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  agency       Agency        @relation(fields: [agencyId], references: [id])
+  tool         Tool          @relation(fields: [toolId], references: [id])
+  toolPlan     ToolPlan      @relation(fields: [toolPlanId], references: [id])
+  usageRecords UsageRecord[]
+
+  @@unique([agencyId, toolId]) // one subscription per (agency, tool)
+  @@index([agencyId, status])
+}
+
+enum InvoiceStatus {
+  PAID
+  OPEN
+  UNCOLLECTIBLE
+  VOID
+}
+
+model Invoice {
+  id              String        @id @default(cuid())
+  agencyId        String
+  toolId          String
+  stripeInvoiceId String        @unique
+  amount          Int // minor units
+  currency        String
+  status          InvoiceStatus @default(OPEN)
+  periodStart     DateTime?
+  periodEnd       DateTime?
+  createdAt       DateTime      @default(now())
+
+  agency Agency @relation(fields: [agencyId], references: [id])
+  tool   Tool   @relation(fields: [toolId], references: [id])
+
+  @@index([agencyId])
+}
+
+model UsageRecord {
+  id                 String   @id @default(cuid())
+  subscriptionId     String
+  meterId            String
+  quantity           Int
+  occurredAt         DateTime @default(now())
+  stripeMeterEventId String?  @unique // idempotency (no double-billing)
+  createdAt          DateTime @default(now())
+
+  subscription Subscription @relation(fields: [subscriptionId], references: [id])
+  meter        Meter        @relation(fields: [meterId], references: [id])
+
+  @@index([subscriptionId, meterId])
+}
+
+// ─── Store Bridge (ADR-009, I-13) ───────────────────────────────────
+enum BridgeConnectionStatus {
+  ACTIVE
+  REVOKED
+}
+
+model StoreBridgeConnection {
+  id            String                 @id @default(cuid())
+  toolId        String
+  storeId       String
+  grantedScopes String[]
+  status        BridgeConnectionStatus @default(ACTIVE)
+  connectedAt   DateTime               @default(now())
+  revokedAt     DateTime?
+
+  tool  Tool  @relation(fields: [toolId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([toolId, storeId]) // the per-store billable unit when ACTIVE
+  @@index([storeId])
+}
+
+// ─── Tool activation + entitlements (ADR-011, I-12) ─────────────────
+enum ToolActivationSource {
+  GRANT
+  SUBSCRIPTION
+}
+
+enum ToolActivationStatus {
+  ACTIVE
+  INACTIVE
+}
+
+model ToolActivation {
+  id        String               @id @default(cuid())
+  toolId    String
+  agencyId  String
+  source    ToolActivationSource
+  status    ToolActivationStatus @default(ACTIVE)
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
+
+  tool   Tool   @relation(fields: [toolId], references: [id], onDelete: Cascade)
+  agency Agency @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+
+  @@unique([toolId, agencyId])
+}
+
+enum EntitlementReason {
+  GRANT
+  TRIAL
+  SUBSCRIPTION
+  FREEMIUM
+  NONE
+}
+
+/// Materialized read-model of the entitlements resolver (I-12). Truth is
+/// computed from grants + subscriptions + usage; this is what guards check.
+model Entitlement {
+  id         String            @id @default(cuid())
+  agencyId   String
+  toolId     String
+  access     Boolean           @default(false)
+  reason     EntitlementReason @default(NONE)
+  quota      Json? // per-meter remaining quota snapshot
+  expiresAt  DateTime?
+  computedAt DateTime          @default(now())
+
+  agency Agency @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  tool   Tool   @relation(fields: [toolId], references: [id], onDelete: Cascade)
+
+  @@unique([agencyId, toolId])
+}
+
+// ─── Unified availability (apps + tools, ADR-011) ───────────────────
+enum AvailabilityMode {
+  PRIVATE // allowlist
+  PUBLIC // available to all, with DENY exclusions
+}
+
+enum AvailabilityEffect {
+  ALLOW
+  DENY
+}
+
+model Availability {
+  id          String           @id @default(cuid())
+  productType ProductType
+  productId   String
+  mode        AvailabilityMode @default(PRIVATE)
+  updatedAt   DateTime         @updatedAt
+
+  entries AvailabilityEntry[]
+
+  @@unique([productType, productId])
+}
+
+model AvailabilityEntry {
+  id             String             @id @default(cuid())
+  availabilityId String
+  agencyId       String // not FK'd to Agency by design (polymorphic join); validated at service layer
+  effect         AvailabilityEffect
+
+  availability Availability @relation(fields: [availabilityId], references: [id], onDelete: Cascade)
+
+  @@unique([availabilityId, agencyId])
+  @@index([agencyId])
+}
+
+// ─── Audit (07-quality/audit-mechanism.md §D) ───────────────────────
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String? // user id; null for system
+  action     String // e.g. 'availability.update', 'tool.grant', 'payout.release', 'bridge.scope.grant'
+  targetType String?
+  targetId   String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([action, createdAt])
+}
