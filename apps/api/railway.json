@@ -5,7 +5,7 @@
     "buildCommand": "corepack enable && pnpm install --frozen-lockfile && pnpm turbo build --filter=api..."
   },
   "deploy": {
-    "preDeployCommand": "pnpm --filter @nova/database migrate:deploy",
+    "preDeployCommand": "pnpm --filter @nova/database migrate:deploy:ci",
     "startCommand": "node apps/api/dist/main.js",
     "healthcheckPath": "/v1/health",
     "restartPolicyType": "ON_FAILURE"
