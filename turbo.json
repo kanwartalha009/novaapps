@@ -4,7 +4,7 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "env": ["DATABASE_URL", "NEXT_PUBLIC_API_URL", "JWT_SECRET", "APP_ENCRYPTION_KEY", "CORS_ORIGINS", "PORT"],
+      "env": ["DATABASE_URL", "API_PROXY_TARGET", "NEXT_PUBLIC_API_URL", "JWT_SECRET", "APP_ENCRYPTION_KEY", "CORS_ORIGINS", "PORT", "COOKIE_DOMAIN", "NOVA_DEFAULT_AGENCY_SLUG"],
       "outputs": ["dist/**", ".next/**", "!.next/cache/**"]
     },
     "dev": {
