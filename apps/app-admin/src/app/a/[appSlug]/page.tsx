@@ -4,6 +4,8 @@ import {
 import { getHostedApp } from "@/lib/apps-registry";
 import { PageHeader, Badge, Card, Stat, Table, Td, Mono } from "@/components/ui";
 
+const ADMIN = process.env.NEXT_PUBLIC_ADMIN_URL ?? "http://admin.nova-apps.localhost:3001";
+
 /**
  * App dashboard — landing page of this app's own admin panel on
  * [slug].nova-platform.localhost:3003. This is the working surface for the app
@@ -41,7 +43,7 @@ export default async function AppOverviewPage({ params }: { params: Promise<{ ap
           <div className="flex items-center gap-2">
             <Badge value={app.status} />
             <a
-              href={`http://admin.nova-apps.localhost:3001/apps/${app.slug}`}
+              href={`${ADMIN}/apps/${app.slug}`}
               className="btn btn-secondary btn-sm"
             >
               Platform settings ↗

@@ -4,7 +4,7 @@ import { NavLinks, type NavSection } from "@/components/nav-links";
 import { Badge } from "@/components/ui";
 import { Toaster } from "@/components/ui/toaster";
 
-const ADMIN = "http://admin.nova-apps.localhost:3001";
+const ADMIN = process.env.NEXT_PUBLIC_ADMIN_URL ?? "http://admin.nova-apps.localhost:3001";
 
 /** Per-tool builder console — [tool-slug].nova-tools.localhost:3004 (ADR-010). */
 export default async function ToolShellLayout({

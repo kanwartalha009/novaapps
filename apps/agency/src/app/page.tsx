@@ -10,7 +10,7 @@ export default function NoTenantPage() {
           </code>
         </p>
         <a
-          href="http://nova-apps.localhost:3000/login"
+          href={`${process.env.NEXT_PUBLIC_WEB_URL ?? "http://nova-apps.localhost:3000"}/login`}
           className="mt-5 inline-block rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"
         >
           Find my agency

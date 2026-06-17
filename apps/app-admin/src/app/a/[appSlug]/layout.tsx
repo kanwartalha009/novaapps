@@ -5,6 +5,8 @@ import { Badge } from "@/components/ui";
 import { CommandMenu, type CommandGroupDef } from "@/components/ui/command-menu";
 import { Toaster } from "@/components/ui/toaster";
 
+const ADMIN = process.env.NEXT_PUBLIC_ADMIN_URL ?? "http://admin.nova-apps.localhost:3001";
+
 /**
  * Per-app admin panel shell — [app-slug].nova-platform.localhost:3003.
  * GrowthOS-pattern: 248px sidebar + sticky 56px topbar.
@@ -60,7 +62,7 @@ export default async function AppPanelLayout({
     })),
     {
       heading: "Platform",
-      items: [{ label: "Open in platform admin", href: `http://admin.nova-apps.localhost:3001/apps/${app.slug}`, hint: "↗" }],
+      items: [{ label: "Open in platform admin", href: `${ADMIN}/apps/${app.slug}`, hint: "↗" }],
     },
   ];
 
@@ -79,7 +81,7 @@ export default async function AppPanelLayout({
               <Badge value={db.status === "CONNECTED" ? "ACTIVE" : db.status === "MIGRATIONS_PENDING" ? "PENDING" : "DRAFT"} />
             </div>
             <a
-              href={`http://admin.nova-apps.localhost:3001/apps/${app.slug}`}
+              href={`${ADMIN}/apps/${app.slug}`}
               className="mt-1.5 block truncate text-xs font-medium text-zinc-600 transition-colors duration-150 hover:text-zinc-900 hover:underline"
             >
               Open in platform admin →
@@ -97,7 +99,7 @@ export default async function AppPanelLayout({
           <div className="flex-1" />
           <CommandMenu groups={commandGroups} placeholder="Search this app's panel…" />
           <a
-            href={`http://admin.nova-apps.localhost:3001/apps/${app.slug}`}
+            href={`${ADMIN}/apps/${app.slug}`}
             className="btn btn-secondary btn-sm"
           >
             Platform settings ↗
