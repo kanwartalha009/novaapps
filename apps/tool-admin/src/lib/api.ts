@@ -7,7 +7,15 @@ async function apiServer<T>(path: string, asText = false): Promise<T | null> {
   const cookie = (await cookies()).toString();
   const res = await fetch(`${API_URL}${path}`, { headers: { cookie }, cache: "no-store" });
   if (!res.ok) return null;
-  return (asText ? ((await res.text()) as unknown as T) : ((await res.json()) as T));
+  // Defensive: empty/non-JSON 2xx must not crash the page (was throwing on empty body).
+  const text = await res.text();
+  if (asText) return text as unknown as T;
+  if (!text) return null;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return null;
+  }
 }
 
 export interface ToolPlan {

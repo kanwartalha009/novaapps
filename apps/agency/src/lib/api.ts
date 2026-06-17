@@ -11,7 +11,15 @@ export async function apiServer<T>(path: string): Promise<T | null> {
     cache: "no-store",
   });
   if (!res.ok) return null;
-  return (await res.json()) as T;
+  // Defensive: an empty or non-JSON 2xx body must not crash the page (was throwing
+  // "Unexpected end of JSON input" on empty responses). Degrade to null.
+  const text = await res.text();
+  if (!text) return null;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return null;
+  }
 }
 
 /** Me, validated against the tenant slug from the subdomain (invariant I-9). */
